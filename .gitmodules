@@ -7,3 +7,6 @@
 [submodule "third-party/rpmalloc"]
 	path = third-party/rpmalloc
 	url = https://github.com/readablesystems/rpmalloc.git
+[submodule "wormhole"]
+	path = wormhole
+	url = https://github.com/wuxb45/wormhole
