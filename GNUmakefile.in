@@ -15,10 +15,12 @@ CXX = @CXX@
 CPPFLAGS := -std=c++17
 DEPSDIR := .deps
 DEPCFLAGS = -MD -MF $(DEPSDIR)/$*.d -MP
-LIBS = @LIBS@ $(MASSTREEDIR)/libjson.a $(LIBMALLOC) -lpthread -lm -lnuma
+LIBS = @LIBS@ $(MASSTREEDIR)/libjson.a $(LIBMALLOC) -lpthread -lm -lnuma $(WORMHOLEDIR)/libwh.so
 LIBOBJS = @LIBOBJS@
 LDFLAGS = @LDFLAGS@
 MASSTREEDIR = @MASSTREEDIR@
+
+WORMHOLEDIR = @WORMHOLEDIR@
 
 ifneq ($(USE_JEMALLOC),1)
 ifneq ($(USE_LIBCMALLOC), 1)
@@ -35,7 +37,7 @@ OBJ = obj
 XXHASH_DIR = third-party/xxHash
 XXHASH_OBJ = $(OBJ)/xxhash.o
 
-CPPFLAGS += -I$(MASSTREEDIR) -I$(XXHASH_DIR) -Ithird-party/rpmalloc
+CPPFLAGS += -I$(MASSTREEDIR) -I$(XXHASH_DIR) -Ithird-party/rpmalloc -I$(WORMHOLEDIR)
 CPPFLAGS += -Ilib -Isto-core -Ilegacy -Idatatype -Ibenchmark
 
 # if CXXFLAGS changes, rebuild
@@ -289,8 +291,8 @@ STO_OBJS = $(OBJ)/Packer.o $(OBJ)/Transaction.o $(OBJ)/TRcu.o $(OBJ)/clp.o \
 	$(OBJ)/PlatformFeatures.o \
 	$(LIBOBJS) $(MVCC_OBJS)
 INDEX_OBJS = $(STO_OBJS) $(MASSTREE_OBJS) $(OBJ)/DB_index.o
-STO_DEPS = $(STO_OBJS) $(MASSTREEDIR)/libjson.a
-INDEX_DEPS = $(INDEX_OBJS) $(MASSTREEDIR)/libjson.a
+STO_DEPS = $(STO_OBJS) $(MASSTREEDIR)/libjson.a $(WORMHOLEDIR)/libwh.so
+INDEX_DEPS = $(INDEX_OBJS) $(MASSTREEDIR)/libjson.a $(WORMHOLEDIR)/libwh.so
 
 
 TPCC_TMPLS = $(OBJ)/tpcc_d.o $(OBJ)/tpcc_dc.o $(OBJ)/tpcc_dn.o $(OBJ)/tpcc_dcn.o \
@@ -446,6 +448,9 @@ masstree: $(MASSTREEDIR)/config.status
 
 $(MASSTREEDIR)/libjson.a: $(MASSTREEDIR)/config.status
 	$(MAKE) -C $(MASSTREEDIR) libjson.a
+
+$(WORMHOLEDIR)/libwh.so:
+	$(MAKE) -C $(WORMHOLEDIR)
 
 config.h: stamp-h
 

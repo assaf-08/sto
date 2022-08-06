@@ -6,11 +6,6 @@
 
 #include "masstree.hh"
 #include "kvthread.hh"
-#include "masstree_tcursor.hh"
-#include "masstree_insert.hh"
-#include "masstree_print.hh"
-#include "masstree_remove.hh"
-#include "masstree_scan.hh"
 #include "string.hh"
 
 #include <vector>
@@ -809,3 +804,4 @@ void mvcc_chain_operations<K, V, DBParams>::cleanup_impl_per_chain(TransItem &it
 
 #include "DB_uindex.hh"
 #include "DB_oindex.hh"
+#include "DB_wormhole.hh"

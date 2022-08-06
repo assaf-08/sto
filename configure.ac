@@ -453,5 +453,9 @@ AC_ARG_WITH([masstree],
                     [Masstree directory [masstree-beta]])],
     [MASSTREEDIR="$withval"], [MASSTREEDIR=masstree-beta])
 AC_SUBST(MASSTREEDIR)
-
+AC_ARG_WITH([wormhole],
+    [AS_HELP_STRING([--with-wormhole=DIR],
+                    [Wormhole directory [wormhole]])],
+    [WORMHOLEDIR="$withval"], [WORMHOLEDIR=wormhole])
+AC_SUBST(WORMHOLEDIR)
 AC_OUTPUT

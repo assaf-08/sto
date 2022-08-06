@@ -1,10 +1,27 @@
 #pragma once
 
 #include "DB_index.hh"
+#include "lib.h"
+#include "kv.h"
 #include "wh.h"
 
 namespace bench
 {
+    class WhRef
+    {
+    public:
+        wormref *ref;
+        WhRef(wormhole *wh)
+        {
+            this->ref = wh_ref(wh);
+        }
+
+        ~WhRef()
+        {
+            wh_unref(this->ref);
+        }
+    };
+
     template <typename K, typename V, typename DBParams>
     class ordered_index : public TObject
     {
@@ -13,24 +30,25 @@ namespace bench
         typedef V value_type;
         typedef commutators::Commutator<value_type> comm_type;
 
+        typedef typename get_version<DBParams>::type version_type;
         static constexpr typename version_type::type invalid_bit = TransactionTid::user_bit;
         static constexpr TransItem::flags_type insert_bit = TransItem::user0_bit;
         static constexpr TransItem::flags_type delete_bit = TransItem::user0_bit << 1u;
         static constexpr TransItem::flags_type row_update_bit = TransItem::user0_bit << 2u;
         static constexpr TransItem::flags_type row_cell_bit = TransItem::user0_bit << 3u;
 
+        typedef typename value_type::NamedColumn NamedColumn;
+        typedef IndexValueContainer<V, version_type> value_container_type;
+
+        static constexpr bool value_is_small = is_small<V>::value;
+
+        static constexpr bool index_read_my_write = DBParams::RdMyWr;
+
         // **** Return Types ****
         typedef std::tuple<bool, bool, uintptr_t, const value_type *> sel_return_type;
         typedef std::tuple<bool, bool> ins_return_type;
         typedef std::tuple<bool, bool> del_return_type;
         typedef std::tuple<bool, bool, uintptr_t, UniRecordAccessor<V>> sel_split_return_type;
-
-        using column_access_t = typename split_version_helpers<ordered_index<K, V, DBParams>>::column_access_t;
-        using item_key_t = typename split_version_helpers<ordered_index<K, V, DBParams>>::item_key_t;
-        template <typename T>
-        static constexpr auto column_to_cell_accesses = split_version_helpers<ordered_index<K, V, DBParams>>::template column_to_cell_accesses<T>;
-        template <typename T>
-        static constexpr auto extract_item_list = split_version_helpers<ordered_index<K, V, DBParams>>::template extract_item_list<T>;
 
         typedef wormhole *table_type;
 
@@ -57,6 +75,13 @@ namespace bench
             }
         };
 
+        using column_access_t = typename split_version_helpers<ordered_index<K, V, DBParams>>::column_access_t;
+        using item_key_t = typename split_version_helpers<ordered_index<K, V, DBParams>>::item_key_t;
+        template <typename T>
+        static constexpr auto column_to_cell_accesses = split_version_helpers<ordered_index<K, V, DBParams>>::template column_to_cell_accesses<T>;
+        template <typename T>
+        static constexpr auto extract_item_list = split_version_helpers<ordered_index<K, V, DBParams>>::template extract_item_list<T>;
+
         ordered_index()
         {
             this->table_ = wh_create();
@@ -66,13 +91,51 @@ namespace bench
         {
             wh_destroy(this->table_);
         }
+        static void thread_init()
+        {
+        }
+
+        value_type *nontrans_get(const key_type &k)
+        {
+            internal_elem *e;
+            WhRef table(this->table_);
+            uint32_t key_len;
+            bool found = wh_get(table.ref, &k, sizeof(k), &e, sizeof(e), &key_len);
+
+            if (found)
+            {
+                return &(e->row_container.row);
+            }
+            else
+                return nullptr;
+        }
+
+        void nontrans_put(const key_type &k, const value_type &v)
+        {
+            internal_elem *e;
+            WhRef table(this->table_);
+            uint32_t key_len;
+            bool found = wh_get(table.ref, &k, sizeof(k), &e, sizeof(e), &key_len);
+            if (found)
+            {
+                if (value_is_small)
+                    e->row_container.row = v;
+                else
+                    copy_row(e, &v);
+            }
+            else
+            {
+                e = new internal_elem(k, v, true);
+                wh_put(table.ref, &k, sizeof(k), &e, sizeof(e));
+            }
+        }
 
         ins_return_type insert_row(const key_type &key, value_type *vptr, bool overwrite = false)
         {
             WhRef table(this->table_);
             internal_elem *e;
             uint32_t len_out;
-            bool found = wh_get(table.ref, &key, sizeof(key), &elem, sizeof(elem), &len_out);
+            bool found = wh_get(table.ref, &key, sizeof(key), &e, sizeof(e), &len_out);
             if (found)
             {
                 TransProxy row_item = Sto::item(this, item_key_t::row_item_key(e));
@@ -169,7 +232,7 @@ namespace bench
             WhRef table(this->table_);
             uint32_t key_len;
 
-            bool found = wh_get(table->ref, &key, sizeof(key), &e, sizeof(e), &key_len);
+            bool found = wh_get(table.ref, &key, sizeof(key), &e, sizeof(e), &key_len);
             if (found)
             {
                 return select_split_row(reinterpret_cast<uintptr_t>(e), accesses);
@@ -234,10 +297,9 @@ namespace bench
             WhRef table(this->table_);
             uint32_t key_len;
 
-            bool found = wh_get(table->ref, &key, sizeof(key), &e, sizeof(e), &key_len);
+            bool found = wh_get(table.ref, &key, sizeof(key), &e, sizeof(e), &key_len);
             if (found)
             {
-                internal_elem *e = lp.value();
                 TransProxy row_item = Sto::item(this, item_key_t::row_item_key(e));
 
                 if (is_phantom(e, row_item))
@@ -275,10 +337,11 @@ namespace bench
             }
             else
             {
-                if (!register_internode_version(lp.node(), lp))
+                // TODO: handle internode version
+                /*if (!register_internode_version(lp.node(), lp))
                 {
                     goto abort;
-                }
+                } */
             }
 
             return del_return_type(true, found);
@@ -500,10 +563,10 @@ namespace bench
             WhRef table(this->table_);
             uint32_t key_len;
 
-            bool found = wh_get(table->ref, &key, sizeof(key), &e, sizeof(e), &key_len);
+            bool found = wh_get(table.ref, &key, sizeof(key), &e, sizeof(e), &key_len);
             if (found)
             {
-                wh_del(table->ref, &key, sizeof(key));
+                wh_del(table.ref, &key, sizeof(key));
                 Transaction::rcu_delete(e);
             }
             return found;
@@ -529,21 +592,16 @@ namespace bench
         {
             return (!e->valid() && !has_insert(item));
         }
-    };
 
-    class WhRef
-    {
-    public:
-        wormref *ref;
-        WhRef(wormhole *wh)
+        static void copy_row(internal_elem *e, comm_type &comm)
         {
-            this->ref = wh_ref(wh);
+            comm.operate(e->row_container.row);
         }
-
-        ~WhRef()
+        static void copy_row(internal_elem *e, const value_type *new_row)
         {
-            wh_unref(this->ref);
+            if (new_row == nullptr)
+                return;
+            e->row_container.row = *new_row;
         }
     };
-
 }

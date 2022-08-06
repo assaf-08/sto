@@ -2,7 +2,15 @@
 
 #include "DB_index.hh"
 
+#include "masstree_tcursor.hh"
+#include "masstree_insert.hh"
+#include "masstree_print.hh"
+#include "masstree_remove.hh"
+#include "masstree_scan.hh"
+#include "masstree.hh"
+
 namespace bench {
+#if 0
 template <typename K, typename V, typename DBParams>
 class ordered_index : public TObject {
 public:
@@ -148,6 +156,7 @@ public:
     }
 
 #if 0
+    static_assert(false);
     sel_return_type
     select_row(uintptr_t rid, RowAccess access) {
         auto e = reinterpret_cast<internal_elem *>(rid);
@@ -937,7 +946,7 @@ private:
 
 template <typename K, typename V, typename DBParams>
 __thread typename ordered_index<K, V, DBParams>::table_params::threadinfo_type* ordered_index<K, V, DBParams>::ti;
-
+#endif
 template <typename K, typename V, typename DBParams>
 class mvcc_ordered_index : public TObject {
 public:
