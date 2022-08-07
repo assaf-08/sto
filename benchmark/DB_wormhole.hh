@@ -350,6 +350,159 @@ namespace bench
             return del_return_type(false, false);
         }
 
+        template <typename Callback, bool Reverse>
+        bool range_scan(const key_type &begin, const key_type &end, Callback callback,
+                        std::initializer_list<column_access_t> accesses, bool phantom_protection = true, int limit = -1)
+        {
+            static_assert(!Reverse); // Wormhole does not support reverse
+            assert((limit == -1) || (limit > 0));
+            auto node_callback = [&](leaf_type *node,
+                                     typename unlocked_cursor_type::nodeversion_value_type version)
+            {
+                // TODO: implement scan_track_node_version: return ((!phantom_protection) || scan_track_node_version(node, version));
+                return true;
+            };
+
+            auto cell_accesses = column_to_cell_accesses<value_container_type>(accesses);
+
+            auto value_callback = [&](const key_type &key, internal_elem *e, bool &ret, bool &count)
+            {
+                TransProxy row_item = index_read_my_write ? Sto::item(this, item_key_t::row_item_key(e))
+                                                          : Sto::fresh_item(this, item_key_t::row_item_key(e));
+
+                bool any_has_write;
+                std::array<TransItem *, value_container_type::num_versions> cell_items{};
+                std::tie(any_has_write, cell_items) = extract_item_list<value_container_type>(cell_accesses, this, e);
+
+                if (index_read_my_write)
+                {
+                    if (has_delete(row_item))
+                    {
+                        ret = true;
+                        count = false;
+                        return true;
+                    }
+                    if (any_has_write)
+                    {
+                        if (has_insert(row_item))
+                            ret = callback(key, &(e->row_container.row));
+                        else
+                            ret = callback(key, row_item.template raw_write_value<value_type *>());
+                        return true;
+                    }
+                }
+
+                bool ok = access_all(cell_accesses, cell_items, e->row_container);
+                if (!ok)
+                    return false;
+                // bool ok = item.observe(e->version);
+                // if (Adaptive) {
+                //     ok = item.observe(e->version, true/*force occ*/);
+                // } else {
+                //     ok = item.observe(e->version);
+                // }
+
+                // skip invalid (inserted but yet committed) values, but do not abort
+                if (!e->valid())
+                {
+                    ret = true;
+                    count = false;
+                    return true;
+                }
+
+                ret = callback(key_type(key), &(e->row_container.row));
+                return true;
+            };
+
+            range_scanner<decltype(node_callback), decltype(value_callback), Reverse>
+                scanner(end, node_callback, value_callback, limit);
+            WhRef table(this->table_);
+            internal_elem *e;
+            uint32_t len_out;
+            wormhole_iter *iter = wh_iter_create(table->ref);
+            wh_iter_seek(iter, &begin, sizeof(key_type));
+            while (wh_iter_valid(iter))
+            {
+                wh_iter_peek(iter, NULL, 0, NULL, &e, sizeof(e), &len_out); // TODO: check return value??
+                wh_iter_park(iter);
+                value_callback()
+            }
+            wh_iter_destroy(iter);
+            return scanner.scan_succeeded_;
+        }
+        template <typename Callback, bool Reverse>
+        bool range_scan(const key_type &begin, const key_type &end, Callback callback,
+                        RowAccess access, bool phantom_protection = true, int limit = -1)
+        {
+            static_assert(!Reverse); // Wormhole does not support reverse
+            assert((limit == -1) || (limit > 0));
+            auto node_callback = [&](leaf_type *node,
+                                     typename unlocked_cursor_type::nodeversion_value_type version)
+            {
+                return ((!phantom_protection) || scan_track_node_version(node, version));
+            };
+
+            auto value_callback = [&](const lcdf::Str &key, internal_elem *e, bool &ret, bool &count)
+            {
+                TransProxy row_item = index_read_my_write ? Sto::item(this, item_key_t::row_item_key(e))
+                                                          : Sto::fresh_item(this, item_key_t::row_item_key(e));
+
+                if (index_read_my_write)
+                {
+                    if (has_delete(row_item))
+                    {
+                        ret = true;
+                        count = false;
+                        return true;
+                    }
+                    if (has_row_update(row_item))
+                    {
+                        if (has_insert(row_item))
+                            ret = callback(key_type(key), &(e->row_container.row));
+                        else
+                            ret = callback(key_type(key), row_item.template raw_write_value<value_type *>());
+                        return true;
+                    }
+                }
+
+                bool ok = true;
+                switch (access)
+                {
+                case RowAccess::ObserveValue:
+                case RowAccess::ObserveExists:
+                    ok = row_item.observe(e->version());
+                    break;
+                case RowAccess::None:
+                    break;
+                default:
+                    always_assert(false, "unsupported access type in range_scan");
+                    break;
+                }
+
+                if (!ok)
+                    return false;
+
+                // skip invalid (inserted but yet committed) values, but do not abort
+                if (!e->valid())
+                {
+                    ret = true;
+                    count = false;
+                    return true;
+                }
+
+                ret = callback(key_type(key), &(e->row_container.row));
+                return true;
+            };
+
+            range_scanner<decltype(node_callback), decltype(value_callback), Reverse>
+                scanner(end, node_callback, value_callback, limit);
+            if (Reverse)
+                table_.rscan(begin, true, scanner, *ti);
+            else
+                table_.scan(begin, true, scanner, *ti);
+            return scanner.scan_succeeded_;
+        }
+
         // TObject interface methods
         bool lock(TransItem &item, Transaction &txn) override
         {
