@@ -31,6 +31,7 @@ namespace bench
         typedef commutators::Commutator<value_type> comm_type;
 
         typedef typename get_version<DBParams>::type version_type;
+        using accessor_t = typename index_common<K, V, DBParams>::accessor_t;
         static constexpr typename version_type::type invalid_bit = TransactionTid::user_bit;
         static constexpr TransItem::flags_type insert_bit = TransItem::user0_bit;
         static constexpr TransItem::flags_type delete_bit = TransItem::user0_bit << 1u;
@@ -356,12 +357,12 @@ namespace bench
         {
             static_assert(!Reverse); // Wormhole does not support reverse
             assert((limit == -1) || (limit > 0));
-            auto node_callback = [&](leaf_type *node,
+            /*auto node_callback = [&](leaf_type *node,
                                      typename unlocked_cursor_type::nodeversion_value_type version)
             {
                 // TODO: implement scan_track_node_version: return ((!phantom_protection) || scan_track_node_version(node, version));
                 return true;
-            };
+            };*/
 
             auto cell_accesses = column_to_cell_accesses<value_container_type>(accesses);
 
@@ -414,21 +415,45 @@ namespace bench
                 return true;
             };
 
-            range_scanner<decltype(node_callback), decltype(value_callback), Reverse>
-                scanner(end, node_callback, value_callback, limit);
             WhRef table(this->table_);
             internal_elem *e;
             uint32_t len_out;
-            wormhole_iter *iter = wh_iter_create(table->ref);
+            key_type key;
+            uint32_t len_key_out;
+
+            wormhole_iter *iter = wh_iter_create(table.ref);
             wh_iter_seek(iter, &begin, sizeof(key_type));
+            int scan_count = 0;
             while (wh_iter_valid(iter))
             {
-                wh_iter_peek(iter, NULL, 0, NULL, &e, sizeof(e), &len_out); // TODO: check return value??
+                wh_iter_peek(iter, &key, sizeof(key), &len_key_out, &e, sizeof(e), &len_out); // TODO: check return value??
                 wh_iter_park(iter);
-                value_callback()
+                bool visited = false;
+                bool count = true;
+                if (!value_callback(key, e, visited, count))
+                {
+                    return false;
+                }
+                else
+                {
+                    if (!visited)
+                    {
+                        return false;
+                    }
+                    if (count)
+                    {
+                        scan_count++;
+                    }
+                    if (limit > 0 && scan_count >= limit)
+                    {
+                        return true;
+                    }
+                }
+                wh_iter_seek(iter, NULL, NULL);
+                wh_iter_skip1(iter);
             }
             wh_iter_destroy(iter);
-            return scanner.scan_succeeded_;
+            return true;
         }
         template <typename Callback, bool Reverse>
         bool range_scan(const key_type &begin, const key_type &end, Callback callback,
@@ -436,11 +461,11 @@ namespace bench
         {
             static_assert(!Reverse); // Wormhole does not support reverse
             assert((limit == -1) || (limit > 0));
-            auto node_callback = [&](leaf_type *node,
-                                     typename unlocked_cursor_type::nodeversion_value_type version)
-            {
-                return ((!phantom_protection) || scan_track_node_version(node, version));
-            };
+            /* auto node_callback = [&](leaf_type *node,
+                                      typename unlocked_cursor_type::nodeversion_value_type version)
+             {
+                 return ((!phantom_protection) || scan_track_node_version(node, version));
+             };*/
 
             auto value_callback = [&](const lcdf::Str &key, internal_elem *e, bool &ret, bool &count)
             {
@@ -494,13 +519,45 @@ namespace bench
                 return true;
             };
 
-            range_scanner<decltype(node_callback), decltype(value_callback), Reverse>
-                scanner(end, node_callback, value_callback, limit);
-            if (Reverse)
-                table_.rscan(begin, true, scanner, *ti);
-            else
-                table_.scan(begin, true, scanner, *ti);
-            return scanner.scan_succeeded_;
+            WhRef table(this->table_);
+            internal_elem *e;
+            uint32_t len_out;
+            key_type key;
+            uint32_t len_key_out;
+
+            wormhole_iter *iter = wh_iter_create(table.ref);
+            wh_iter_seek(iter, &begin, sizeof(key_type));
+            int scan_count = 0;
+            while (wh_iter_valid(iter))
+            {
+                wh_iter_peek(iter, &key, sizeof(key), &len_key_out, &e, sizeof(e), &len_out); // TODO: check return value??
+                wh_iter_park(iter);
+                bool visited = false;
+                bool count = true;
+                if (!value_callback(key, e, visited, count))
+                {
+                    return false;
+                }
+                else
+                {
+                    if (!visited)
+                    {
+                        return false;
+                    }
+                    if (count)
+                    {
+                        scan_count++;
+                    }
+                    if (limit > 0 && scan_count >= limit)
+                    {
+                        return true;
+                    }
+                }
+                wh_iter_seek(iter, NULL, NULL);
+                wh_iter_skip1(iter);
+            }
+            wh_iter_destroy(iter);
+            return true;
         }
 
         // TObject interface methods
@@ -680,8 +737,14 @@ namespace bench
                 item.clear_needs_unlock();
             }
         }
+        uint64_t gen_key()
+        {
+            return fetch_and_add(&key_gen_, 1);
+        }
 
     private:
+        uint64_t key_gen_;
+
         table_type table_;
 
         static bool
